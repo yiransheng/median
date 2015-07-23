@@ -1,0 +1,670 @@
+---
+title: "Test Population Median is Equal for Discreet Distributions"
+author: "Yiran Sheng"
+date: "07/16/2015"
+output: 
+  html_document:
+    toc: true
+---
+```{r, setup, include=FALSE}
+library(ggplot2)
+library(plyr)
+
+kde <- function(sample) {
+  hT = bw.nrd0(sample)
+  return(Vectorize(function(x) mean(dnorm((x-sample)/hT)/hT)))
+}
+
+KDE <- function(sample) {
+  hT = bw.nrd0(sample)
+  return(Vectorize(function(x) mean(pnorm((x-sample)/hT))))
+}
+
+qq.sample <- function(x, y, probs=seq(1,999)/1000, xrange=range(x), yrange=range(y)) {
+  
+  len <- length(probs)
+  intvX <- xrange
+  intvY <- yrange
+  
+  Fx <- KDE(x)
+  Fy <- KDE(y)
+  QKDEX_ <- function(p){
+    tempf <- function(t) Fx(t)-p
+    uniroot(tempf,intvX)$root 
+  }
+  QKDEY_ <- function(p){
+    tempf <- function(t) Fy(t)-p
+    uniroot(tempf,intvY)$root 
+  }
+  QKDEX <- Vectorize(QKDEX_)
+  QKDEY <- Vectorize(QKDEY_)
+  
+  df <- data.frame(x=quantile(x, probs=probs),
+                   y=quantile(y, probs=probs),
+                   qkdex=QKDEX(probs),
+                   qkdey=QKDEY(probs))
+  
+  f <- lm(y~x, data=df)
+  
+  p <- ggplot(df) + 
+       geom_point(aes(x, y), size=3, shape=3, alpha=0.2) +
+       geom_line(aes(qkdex, qkdey), alpha=0.4, colour="red") + 
+       geom_abline(intercept=coef(f)[1], slope=coef(f)[2], colour='blue')
+  
+  plot(p)
+}
+
+
+```
+
+
+This post stem from an interesting discussion in the course W203: Exploring and Analyzing Data happened on July 16, 2015. The premise is a simple enough statistical puzzle at a glance - yet mainstream parametric hypothesis test procedures prove inadequate. 
+
+## Problem
+
+> Do Facebook users have higher __median__ number of children than non-Facebook users?
+
+(__Data__: 5000 sample-size survey)
+
+As noted in the class, the research question here asks about population _meidan_ as opposed the usual _mean_ in typical statistical textbooks, normal techniques like T test and ANOVA are out of the window. We talked about possibly using either Wilcoxon rank sum test, Mood's Median test or bootstrapping. 
+
+In this post, we ask a slightly different (easier) version of the question:
+
+* Do Facebook users and non-Facebook users have _different_ population median? 
+
+And we try to evaluate different tests in answering this question through simulation. 
+
+## Notations
+
+Denote $X$ the r.v. of number of children of individuals who are Facebook users, and $Y$ the number of children of individuals who are not Facebook users. Assume we have data from 2500 $x_i$ and 2500 $y_j$, namely 2500 observations from each group. 
+
+$$H_0: \text{median}(X) = \text{median}(Y)$$
+
+vs.
+
+$$H_1: \text{median}(X) \neq \text{median}(Y)$$
+
+## Notes on Median 
+
+For a real-valued random variable $X$ with CDF $F$, the median is defined as the the real number $m_X$ such that:
+
+$$\Pr[X \leq m_X] \geq \frac{1}{2} \text{and} \Pr[X \geq m_X] \geq \frac{1}{2}$$
+
+or:
+
+$$\int_{(-\infty, m_X]}dF(x) \geq \frac{1}{2} \text{and} \int_{[m_X, \infty)}dF(x) \geq \frac{1}{2}$$
+
+For $X$ with an absolutely continuous probability distribution, we have:
+
+$$\Pr[X \leq m_X] = \Pr[X \geq m_X] = \frac{1}{2}$$
+
+In general, median is not necessarily unique. For example, Bernoulli(0.5) does not have a single unique median, any $m \in (0,1)$ satisfies the above defining properties, and therefore is a valid median. Also, at least one median always exist for any random variable, and the largest median is $m := \sup\{a | \Pr[X \geq a] \geq \frac{1}{2} \}$ and smallest median is $m := \inf\{a | \Pr[X \leq a] \geq \frac{1}{2} \}$. See <sup>[2]</sup>. In addition, the set of median is always a closed and bounded interval in $\mathbb{R}$ in case it is not unique. 
+
+## When Student T Test is Suitable
+
+T test assumes normal distribution with the same variance from both groups of observations. The Normal distribution's median is the same as its mean. Therefore, if we are reasonably certain, the two populations are normal, we can use T test to test the equality of population median. 
+
+For out specific problem outlined previously, however, we cannot assume normal distribution - even before any normality test invalidates the assumption. The number of children for a given individual is discreet, non-negative, bounded and most likely not symmetrical. Hence, we suspect T test will perform poorly in answering the research question. 
+
+## Special Case 1: Binomial Population Distribution 
+
+We start our exploration simple: by assuming the population is follows a Binomial distribution, more to the point, a special class of Binomial distribution where the median is unique (when $np$ is an integer). To model number of children as a Binomial distribution is questionable, however, Binomial r.v. does have the desired property of discreet, non-negative values, and we can easily tweak $X$ and $Y$ to have different distribution yet identical medians. 
+
+### Population Characteristics
+
+Here are the assumptions for population distribution:
+
+$$X \sim B(100, 0.15)$$
+
+and 
+
+$$Y \sim B(20, 0.75)$$
+
+We have: 
+
+$$m_X = m_Y = 15$$ and $H_0$ is satisfied. The two populations are purposefully made distinct enough, $X$ has a positive skewness and $Y$ has a negative skewness by design, which further invalidates normality assumption which is required for T test to be effective. 
+
+### Simulation Setup
+
+Now lets prepare for the simulation. In R a test is usually a function that returns some object typically with the attribute `$p.value`. We can take advantage of this in designing our simulation interface. `sim.run` is just a dumb function take takes a test function, do a random sampling from our $X$ and $Y$ populations (by specifying sample function `sample.fun`, which would return a matrix/data.frame of dimension $n \times 2$, the first column being $x_i$'s and second being $y_j$'s) and return test's `p.value`.
+
+```{r}
+# single run
+sim.run <- function(test, sample.fun, sample_size = 2500) {
+  data <- sample.fun(sample_size)
+  x <- data[ ,1]
+  y <- data[ ,2]
+  test(x,y)$p.value
+}
+```
+
+For our Binomial populations, here's the implementation of `sample.fun`
+
+```{r}
+sample.binom <- function(n) {
+  cbind(
+    rbinom(n, 100, 0.15),
+    rbinom(n, 20, 0.75)
+  )
+} 
+```
+
+The Pmf for $X$ and $Y$ are plotted below:
+```{r}
+pmf.X <- data.frame(k = 0:100, prob = dbinom(0:100, size = 100, p = 0.15), variable = 'X')
+pmf.Y <- data.frame(k = 0:20, prob = dbinom(0:20, size = 20, p = 15/20), variable = 'Y')
+
+dat <- rbind(pmf.X, pmf.Y)
+
+p <- ggplot(dat, aes(x = k, y = prob))
+p + geom_segment(aes(xend = k, yend = 0), size=0.5) + ylab('p(k)') + facet_grid(. ~ variable)
+```
+
+### Implementing Tests
+
+For T Test and Wilcox rank sum tests, we have readily available test functions in base R: `t.test` and `wilcox.test`. For Mood's Test and Bootstrapped T Test, we need to implement them ourselves. 
+
+#### Mood's Test
+
+Let's quickly go over what Mood's Test is as it is lesser known (even its Wikipedia page is a stub!). [This](http://www2.hawaii.edu/~taylor/z631/moods.pdf) is a good intro. To recap:
+
+1. Determine the overall median.
+
+2. For each sample, count how many observations are greater than the overall median, and how many are equal to or less than it.
+
+3. Put the counts from step 2 into a 2xk contingency table
+
+|                                      | sample1 | sample2 |
+|:------------------------------------:|:-------:|---------|
+| greater than overall median          |         |         |
+| less than or equal to overall median |         |         |
+
+4. Perform a chi-square test on this table, testing the hypothesis that the probability of an observation being greater than the overall median is the same for all populations.
+
+And here's the code:
+```{r}
+mood.test <- function(x, y) {
+  overall_mid <- median( c(x, y) )
+  nx <- length(x)
+  ny <- length(y)
+  
+  nxbelow <- sum(x <= overall_mid)
+  nxabove <- sum(x > overall_mid)
+  nybelow <- sum(y <= overall_mid)
+  nyabove <- sum(y > overall_mid)
+  
+  chisq.test( rbind( c(nxabove, nxbelow), c(nyabove, nybelow) ) )
+}
+```
+
+#### Bootstrapped T Test
+
+Given a sufficiently large sample size (in our case 2500 for $X$ and $Y$), we can generate new samples by random sampling with replacement, this is the central idea of bootstrapping. For each set of the re-sampled data $S_k$, we can compute a sample median $m_k$. The sample median is an unbiased estimator of population median, therefore, the mean of all $m_k$'s follows a normal distribution asymptotically with the mean of population median, due to CLT - and this is a statistic we can perform T Test on. 
+
+In addition to Bootstrapping, we also consider subsampling. The key difference is when resampling, subsampling samples a smaller sample size and _without_ replacement. The advantage of subsampling is that it is valid under much weaker conditions compared to the bootstrap. 
+
+The code:
+
+```{r}
+medians.bootstrap <- function(x, k=1e3) {
+  n <- length(x)
+  replicate(k, expr=median(sample(x, n, replace=TRUE)))
+}
+
+medians.subsample <- function(x, k=1e3) {
+  n <- 100
+  replicate(k, expr=median(sample(x, n, replace=FALSE)))
+}
+
+
+t.test.bootstrap <- function(x, y) {
+  tryCatch({
+    t.test(medians.bootstrap(x), medians.bootstrap(y))
+  }, error=function(err) {
+    list(
+      p.value=NA  
+    )
+  })
+}
+t.test.subsample <- function(x, y) {
+  tryCatch({
+    t.test(medians.subsample(x), medians.subsample(y))
+  }, error=function(err) {
+    list(
+      p.value=NA  
+    )
+  })
+}
+```
+
+### Simulations
+
+With all building blocks, ready, now we run all five (T, Wilcox, Mood, Bootstrapped T, Subsample T) tests on 10000 random samples, and record the p-values. What should the distribution of simulation p-values look like? Recall the relation between Type I Error probability, alpha and p-value:
+
+$$\Pr[\text{Type I Error}] = \Pr[P < \alpha]$$
+
+For $0 < \alpha < 1$, where $P$ is the r.v. for p-value in performing repeated tests on different samples from the same population. That's the distribution function of a uniform r.v. 
+
+At this step, a problem surfaced. Since there are so few possible values sample observations could occupy, resampling using Bootstrapping essential produces the same sample median all the time, halting the subsequent T Test. Error message in R:
+
+```
+Error in t.test.default(c(1, 1), c(1, 1)) : data are essentially constant
+```
+
+Therefore, we have to drop Bootstrapping in favor of Subsampling. 
+
+```{r, cache=TRUE}
+p.values <- cbind(
+  replicate(n=1e4, expr=sim.run(t.test, sample.binom)),
+  replicate(n=1e4, expr=sim.run(wilcox.test, sample.binom)),
+  replicate(n=1e4, expr=sim.run(mood.test, sample.binom)),
+  replicate(n=1e4, expr=sim.run(t.test.subsample, sample.binom))
+)
+p.values <- as.data.frame(p.values)
+names(p.values) <- c('T', 'Wilcox', 'Mood', 'Subsample')
+```
+
+### Kernel Density Plots of p-values
+
+```{r}
+par(mfrow=c(2,2))
+for(i in 1:4) {
+  p.value <- p.values[!is.na(p.values[ ,i]), i]
+  plot(density(p.value, from=0 ,to = 1), main=names(p.values)[i])
+}
+```
+
+### ECDF Plots of p-values
+
+```{r}
+par(mfrow=c(2,2))
+for(i in 1:4) {
+  p.value <- p.values[!is.na(p.values[ ,i]), i]
+  plot.ecdf(p.value, main=names(p.values)[i])
+}
+```
+
+### Conclusions for Binomial Population
+
+For our specifically chosen population, T Test looks surprisingly good, its empirical p-values is the closest to uniform distribution among the four tests. The reason, of course is for Binomial distribution its mean and median is the same: $np$, and T Test turns out to be very robust. A typical method to evaluate tests is Power function. In our context, rephrase the hypothesis as follows:
+
+$$\theta := m_X - m_Y$$
+
+$$H_0: \theta = 0$$
+
+vs.
+
+$$H_1: \theta \neq 0$$
+
+Power function is defined as:
+
+$P_{\theta}(X \in R) = \Pr[\text{Type I Error}]$ when $H_0$ is true, i.e. $\theta = 0$
+
+$P_{\theta}(X \in R) = 1 - \Pr[\text{Type II Error}]$ when $H_1$ is true, i.e. $\theta \neq 0$
+
+where $R$ is the reject region of the test.
+
+The ideal power function should have a value of 0 when $\theta = 0$ and 1 when $\theta \neq 0$. For example, If our test is a coin flip, the corresponding power function is:
+
+$$P_{\theta}(X \in R) = \frac{1}{2}$$
+
+which is not very good. 
+
+The empirical power function values when $H_0$ is true ($\theta = 0$) is, assuming a 5% $\alpha$:
+
+* T Test: `r mean(p.values[ ,1] <0.05)`
+
+* Wilcox Test: `r mean(p.values[ ,2] <0.05)`
+
+* Mood Test: `r mean(p.values[ ,3] <0.05)`
+
+* Subsampling T Test: `r mean(p.values[!is.na(p.values[ ,4]),4] < 0.05)`
+
+Clearly, T Test is the winner here, other tests have larger Type I error probabilities, and Subsampling T Tests is even worse than a coin flip test. 
+
+## Special Case 1: Binomial Population Distribution (Continued)
+
+Now we consider the populations where $H_1$ is true:
+```{r}
+sample.binom2 <- function(n, diff) {
+  cbind(
+    rbinom(n, 100, (15 + diff) / 100),
+    rbinom(n, 20, 0.75)
+  )
+} 
+```
+
+The goal of this section is to get a good picture of the shape of power functions, by controlling $\theta$. We create a different sample function, withe additional parameter `diff` as the difference of population median. We shall consider $\theta \in \{-5, -4, -2, -2, -1, 1, 2, 3, 4, 5\}$. 
+
+```{r, cache=TRUE}
+power <- function(diff, runs=1e4) {
+
+  sample.fun <- function(n) {
+    sample.binom2(n, diff)
+  }
+  
+  p.values <- cbind(
+    replicate(n=runs, expr=sim.run(t.test, sample.fun)),
+    replicate(n=runs, expr=sim.run(wilcox.test, sample.fun)),
+    replicate(n=runs, expr=sim.run(mood.test, sample.fun)),
+    replicate(n=runs, expr=sim.run(t.test.subsample, sample.fun))
+  )
+  p.values <- as.data.frame(p.values)
+  names(p.values) <- c('T', 'Wilcox', 'Mood', 'Subsample')
+  
+  summarize(p.values, 
+      T=mean(T < 0.05), 
+      Wilcox=mean(Wilcox < 0.05),
+      Mood=mean(Mood < 0.05),
+      Subsample=mean(Subsample[!is.na(Subsample)] < 0.05))
+}
+```
+
+Running the simulation for all $\theta$ values:
+
+```{r, cache=TRUE}
+powers <- ldply(c(-5:-1, 1:5), power)
+powers <- cbind(powers, c(-5:-1, 1:5))
+names(powers)[5] <- 'Median.Diff'
+```
+```{r}
+print(powers)
+```
+
+All tests have very high powers. 
+
+## Special Case 2: Randomized Populations
+
+### Population Characteristics
+
+There are infinitely many ways of specifying population distribution of $X$ and $Y$. In this section, we restrict the potential values of both $X$ and $Y$ to $\{0, 1, 2, \dots, 10 \}$. The Pmf of $X$ can be specified by 10 params: $p_{xi} = \Pr[X = i], i \in \{0, 1, 2, \dots, 10 \}$ where $\Sigma_{i=0}^{10}p_{xi} = 1$. Same goes for $Y$. Note the population median is not necessarily unique. 
+
+If there exists $m \in \{0, 1, \dots, 10\}$ such that: 
+
+$$\Sigma_{i=0}^{m}p_{xi} = \frac{1}{2}$$ 
+
+then the median is _not_ unique, any number in $[m, m+1]$ is a population median. If we define median as $\frac{m+m+1}{2}$, the sample median is an unbiased estimator of population median. 
+
+If no such $m$ exist, i.e. $\Sigma_{i=0}^{m_1 -1}p_{xi} < \frac{1}{2}$ and $\Sigma_{i=0}^{m_1}p_{xi} > \frac{1}{2}$ then population median is $m_1$. In this case, sample median is a biased estimator (but asymptotically unbiased). 
+
+Following the above definition of median (in case it's not unique), in this section, we shall generate $p_{xi}$ from an uniform distribution, then normalize them such that $\Sigma_{i=0}^{10}p_{xi} = 1$. Once the population of $X$ is chosen, we use the following procedure to choose $p_{yj}$'s, such that $m_X = m_Y$:
+
+1. If $m_X$ is not an integer (eg. $m_X=4.5$):
+
+  * for $0 \leq i \leq \left \lfloor{m_X}\right \rfloor$, choose $p_{xi}$ from an uniform distribution, and normalize them such that:
+    $\Sigma_{i=0}^{\left \lfloor{m_X}\right \rfloor}p_{xi} = \frac{1}{2}$
+  * for $\left \lceil{m_X}\right \rceil \leq i \leq 10$, choose $p_{xi}$ from an uniform distribution, and normalize them such that:
+    $\Sigma_{i=\left \lceil{m_X}\right \rceil}^{10}p_{xi} = \frac{1}{2}$
+
+2. If $m_X$ is an integer
+
+  * choose $p_a$ and $p_b$ from Uniform(0, $\frac{1}{2}$) and Uniform($\frac{1}{2}$, 1)
+  * for $i \in \{0, 1, \dots, m_X-1\}$, choose $p_{yi}$ from Uniform distribution, and normalize so that they sum to $p_a$
+  * for $i \in \{m_X+1, \dots, 10\}$, choose $p_{yi}$ from Uniform distribution, and normalize so that they sum to $1 - p_b$
+  * set $p_{y,m_X}$ to $p_b - p_a$
+
+Note in this process, scenario 1. will almost never happen. Also, since in general, sample median is biased, the subsampling method is probably not reliable. 
+
+
+### R Code for Random Populations
+
+
+The following function generates the probabilities for $X$
+```{r}
+x.probs <- function() {
+  ps <- runif(11)
+  ps / sum(ps)
+}
+```
+
+The following function `pop.median` and `pop.mean` computes the population median and mean given a vector of probabilities:
+```{r}
+S <- lower.tri(diag(11), diag=TRUE)
+pop.median <- function(probs) {  
+  cdf <- as.vector(S %*% probs)
+  lower.half <- cdf[cdf < 0.5]
+  upper.half <- cdf[cdf > 0.5]
+  if(length(lower.half) + length(upper.half) < length(cdf)) {
+    m <- which(cdf == 0.5)
+    return(m - 0.5)
+  }
+  length(lower.half)
+}
+
+pop.mean <- function(probs) {
+  sum( probs*seq(0, 10) )
+}
+```
+
+The following function takes care of scenario 1., and generates probabilities for $Y$ given a non-integer median:
+```{r}
+y.probs.1 <- function(m) {
+  m <- floor(m)
+  ps.lower <- runif(m)
+  ps.upper <- runif(11 - m)
+  
+  ps.lower <- ps.lower / sum(ps.lower) / 2
+  ps.upper <- ps.upper / sum(ps.upper) / 2
+  
+  c(ps.lower, ps.upper)
+}
+```
+The following function takes care of scenario 2., and generates probabilities for $Y$ given an integer median:
+```{r}
+y.probs.2 <- function(m) {
+  pa <- runif(1, 0, 0.5)
+  pb <- runif(1, 0.5, 1)
+  
+  ps.lower <- runif(m)
+  ps.upper <- runif(10 - m)
+  
+  ps.lower <- ps.lower / sum(ps.lower) * pa
+  ps.upper <- ps.upper / sum(ps.upper) * (1 - pb)
+  
+  c(ps.lower, pb-pa, ps.upper)
+}
+```
+
+And together, they form the function to generate probabilities for $Y$:
+```{r}
+y.probs <- function(m) {
+  if(m == floor(m)) {
+    return(y.probs.2(m))
+  } else {
+    return(y.probs.1(m))
+  }
+}
+```
+Here's how two randomly generated populations look like in their pmf:
+```{r}
+pxs <- x.probs()
+mx <- pop.median(pxs)
+pys <- y.probs(mx)
+
+pmf.X <- data.frame(k = 0:10, prob = pxs, variable = 'X')
+pmf.Y <- data.frame(k = 0:10, prob = pys, variable = 'Y')
+
+dat <- rbind(pmf.X, pmf.Y)
+dat$k <- as.factor(dat$k)
+
+p <- ggplot(dat, aes(x = k, y = prob))
+p + geom_segment(aes(xend = k, yend = 0), size=4) + ylab('p(k)') + facet_grid(. ~ variable)
+```
+```{r}
+print(pop.median(pxs))
+print(pop.median(pys))
+```
+
+And we create a new sample function, which creates a pair of randomized populations with the same median, and sample from them:
+```{r}
+sample.random_pop <- function(n) {
+  px <- x.probs()
+  m <- pop.median(px)
+  py <- y.probs(m)
+  cbind(
+    sample(x = seq(0, 10), n, replace = T, prob=px),
+    sample(x = seq(0, 10), n, replace = T, prob=py)
+  )
+}
+```
+### Simulation
+```{r, cache=TRUE}
+p.values <- cbind(
+  replicate(n=1e4, expr=sim.run(t.test, sample.random_pop)),
+  replicate(n=1e4, expr=sim.run(wilcox.test, sample.random_pop)),
+  replicate(n=1e4, expr=sim.run(mood.test, sample.random_pop)),
+  replicate(n=1e4, expr=sim.run(t.test.subsample, sample.random_pop))
+)
+p.values <- as.data.frame(p.values)
+names(p.values) <- c('T', 'Wilcox', 'Mood', 'Subsample')
+```
+### Kernel Density Plots of p-values
+
+```{r}
+par(mfrow=c(2,2))
+for(i in 1:4) {
+  p.value <- p.values[!is.na(p.values[ ,i]), i]
+  plot(density(p.value, from=0 ,to = 1), main=names(p.values)[i])
+}
+```
+
+### ECDF Plots of p-values
+
+```{r}
+par(mfrow=c(2,2))
+for(i in 1:4) {
+  p.value <- p.values[!is.na(p.values[ ,i]), i]
+  plot.ecdf(p.value, main=names(p.values)[i])
+}
+```
+
+### Conclusion
+
+All of these look pretty bad. 
+
+### Trouble Shooting
+
+Let's generate two random populations:
+```{r}
+set.seed(123)
+pxs <- x.probs()
+m <- pop.median(pxs)
+pys <- y.probs(m)
+```
+
+Both populations have a median of `r m`, the mean for $X$ is `r pop.mean(pxs)` and `r pop.mean(pys)` for $Y$. The mean and median is not the same for the population, therefore, we expect T Test to perform poorly. To get a sense of the population distribution, we plot their pmf:
+```{r}
+pmf.X <- data.frame(k = 0:10, prob = pxs, variable = 'X')
+pmf.Y <- data.frame(k = 0:10, prob = pys, variable = 'Y')
+
+dat <- rbind(pmf.X, pmf.Y)
+dat$k <- as.factor(dat$k)
+
+p <- ggplot(dat, aes(x = k, y = prob))
+p + geom_segment(aes(xend = k, yend = 0), size=4) + ylab('p(k)') + facet_grid(. ~ variable)
+```
+
+$X$ and $Y$ have very different distributions, even if they share the same median. Keep these two populations fixed, we repeated sample from them using the following sample function:
+
+```{r}
+sample.random_pop2 <- function(n) {
+  cbind(
+    sample(x = seq(0, 10), n, replace = T, prob=pxs),
+    sample(x = seq(0, 10), n, replace = T, prob=pys)
+  )
+}
+```
+And Run the simulation
+```{r, cache=TRUE}
+p.values <- cbind(
+  replicate(n=1e4, expr=sim.run(t.test, sample.random_pop)),
+  replicate(n=1e4, expr=sim.run(wilcox.test, sample.random_pop)),
+  replicate(n=1e4, expr=sim.run(mood.test, sample.random_pop)),
+  replicate(n=1e4, expr=sim.run(t.test.subsample, sample.random_pop))
+)
+p.values <- as.data.frame(p.values)
+names(p.values) <- c('T', 'Wilcox', 'Mood', 'Subsample')
+```
+```{r}
+par(mfrow=c(2,2))
+for(i in 1:4) {
+  p.value <- p.values[!is.na(p.values[ ,i]), i]
+  plot(density(p.value, from=0 ,to = 1), main=names(p.values)[i])
+}
+```
+
+#### Problem With Mood Test
+
+One thing we notice is since many $X$ and $Y$ observations will take the value of their population median `r pop.median(pxs)`. In the case of Mood Test, under $H_0$ ($m_X = m_Y = m$), the following is assumed to be true for the Chi-sq test to work:
+
+$$\Pr[X \leq m] = \Pr[Y \leq m]$$
+
+This would work well for absolute continuously distributions, but it's easy to verify this is not the case in our randomly generated populations, instead all we can say is:
+
+$$\Pr[X \leq m] > \frac{1}{2}$$
+
+$$\Pr[Y \leq m] > \frac{1}{2}$$
+
+and
+
+$$\Pr[X < m] < \frac{1}{2}$$
+
+$$\Pr[Y < m] < \frac{1}{2}$$
+
+The difference between $\Pr[X \leq m]$(`r sum(pxs[1:pop.median(pxs)+1])`) and $\Pr[Y \leq m]$(`r sum(pys[1:pop.median(pxs)+1])`) non-zero and quite large. 
+
+#### Problem With Subsampling 
+
+The first thing to keep notice is we choose a subsample size of 100 throughout this exercise, and we know the sample median could be biased, and this could cause problems. To illustrate the biasness of sample median, we shall draw samples from $X$ size ranging from 10 to 100000, and plot the sample median:
+
+```{r, cache=TRUE}
+sizes <- floor(c(seq(50, 950, by=50), 10^(seq(3,5,by=0.2))))
+
+medians <- sapply(sizes, 
+                  function(n) mean(replicate(1e3, expr=median(sample(x = seq(0, 10), n, replace = T, prob=pxs)))))
+
+sample.medians <- data.frame(
+  size=sizes,
+  median=medians
+)
+```
+```{r}
+p <- ggplot(sample.medians)
+p <- p + geom_point(aes(x=size, y=median)) + 
+         geom_line(aes(x=size, y=median)) +
+         geom_hline(yintercept=m) + 
+         geom_text(aes(0,m,label = 'Population Median', hjust = -2, vjust=1))
+plot(p)
+```
+
+For $Y$ however, the bias is pretty-much non-existent, due to the fact $\Pr[Y = m]$(`r pys[m+1]`) is very large.
+
+```{r, cache=TRUE}
+medians <- sapply(sizes, 
+                  function(n) mean(replicate(1e3, expr=median(sample(x = seq(0, 10), n, replace = T, prob=pys)))))
+
+sample.medians <- data.frame(
+  size=sizes,
+  median=medians
+)
+```
+```{r}
+p <- ggplot(sample.medians)
+p <- p + geom_point(aes(x=size, y=median)) + 
+         geom_line(aes(x=size, y=median)) +
+         geom_hline(yintercept=m) + 
+         geom_text(aes(0,m,label = 'Population Median', hjust = -2, vjust=1))
+plot(p)
+```
+
+Due to the bias of sample median in $X$, the subsampling T test will reject $H_0$ for any reasonable subsample size we choose. 
+
+## Summary
+
+(TO-DO)
+
+## Footnotes
+
+[1] MIDS program: http://datascience.berkeley.edu/
+
+[2] http://math.stackexchange.com/questions/85696/does-a-median-always-exist-for-a-random-variable
